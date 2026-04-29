@@ -1,0 +1,38 @@
+{
+  "name": "@waimakers/gpt-image-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for OpenAI's image generation API (gpt-image-2 / gpt-image-1)",
+  "type": "module",
+  "bin": {
+    "gpt-image-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "openai": "^4.85.0",
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "openai",
+    "gpt-image",
+    "gpt-image-2",
+    "image-generation",
+    "ai"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/waimakers/gpt-image.git"
+  }
+}
