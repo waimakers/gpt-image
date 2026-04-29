@@ -4,7 +4,9 @@ import * as fs from "fs";
 import * as path from "path";
 
 export type ImageModel =
+  | "chatgpt-image-latest"
   | "gpt-image-2"
+  | "gpt-image-2-2026-04-21"
   | "gpt-image-1.5"
   | "gpt-image-1"
   | "gpt-image-1-mini"
@@ -81,14 +83,113 @@ export interface ImageResult {
     output_tokens?: number;
     total_tokens?: number;
     input_tokens_details?: any;
+    output_tokens_details?: any;
   };
+  cost_estimate_usd?: {
+    total: number;
+    breakdown: any;
+    pricing_source_date: string;
+    note: string;
+  } | null;
   size?: string;
   quality?: string;
   output_format?: string;
   background?: string;
 }
 
-const DEFAULT_MODEL: ImageModel = "gpt-image-2";
+// Default to the rolling alias so the MCP automatically rides any future
+// OpenAI image model upgrade without a code change.
+const DEFAULT_MODEL: ImageModel = "chatgpt-image-latest";
+
+// Pricing snapshot, USD per 1M tokens. Verify at https://platform.openai.com/docs/pricing
+const PRICING_DATE = "2026-04-29";
+
+const PRICING_PER_1M_TOKENS: Record<
+  string,
+  { text_in?: number; image_in?: number; image_out: number }
+> = {
+  "chatgpt-image-latest": { text_in: 5, image_in: 8, image_out: 32 },
+  "gpt-image-2": { text_in: 5, image_in: 8, image_out: 32 },
+  "gpt-image-2-2026-04-21": { text_in: 5, image_in: 8, image_out: 32 },
+  "gpt-image-1.5": { text_in: 5, image_in: 10, image_out: 36 },
+  "gpt-image-1": { text_in: 5, image_in: 10, image_out: 40 },
+  "gpt-image-1-mini": { text_in: 2, image_in: 2.5, image_out: 8 },
+};
+
+// DALL-E uses flat per-image pricing instead of tokens.
+const PRICING_PER_IMAGE: Record<string, Record<string, number>> = {
+  "dall-e-3": {
+    "standard:1024x1024": 0.04,
+    "hd:1024x1024": 0.08,
+    "standard:1024x1792": 0.08,
+    "hd:1024x1792": 0.12,
+    "standard:1792x1024": 0.08,
+    "hd:1792x1024": 0.12,
+  },
+  "dall-e-2": {
+    "1024x1024": 0.02,
+    "512x512": 0.018,
+    "256x256": 0.016,
+  },
+};
+
+function round4(n: number): number {
+  return Number(n.toFixed(4));
+}
+
+function estimateCost(
+  model: string,
+  usage: any | undefined,
+  n: number,
+  size: string | undefined,
+  quality: string | undefined
+): ImageResult["cost_estimate_usd"] {
+  const tokenRates = PRICING_PER_1M_TOKENS[model];
+  if (tokenRates && usage) {
+    const textIn = usage.input_tokens_details?.text_tokens ?? 0;
+    const imageIn = usage.input_tokens_details?.image_tokens ?? 0;
+    const imageOut =
+      usage.output_tokens_details?.image_tokens ?? usage.output_tokens ?? 0;
+
+    const textInUsd = (textIn / 1_000_000) * (tokenRates.text_in ?? 0);
+    const imageInUsd = (imageIn / 1_000_000) * (tokenRates.image_in ?? 0);
+    const imageOutUsd = (imageOut / 1_000_000) * tokenRates.image_out;
+    const total = textInUsd + imageInUsd + imageOutUsd;
+
+    return {
+      total: round4(total),
+      breakdown: {
+        text_input_tokens: textIn,
+        image_input_tokens: imageIn,
+        image_output_tokens: imageOut,
+        text_input_usd: round4(textInUsd),
+        image_input_usd: round4(imageInUsd),
+        image_output_usd: round4(imageOutUsd),
+        rates_per_1m_tokens: tokenRates,
+      },
+      pricing_source_date: PRICING_DATE,
+      note:
+        "Estimate from snapshot pricing table. Verify against platform.openai.com/docs/pricing for billing accuracy.",
+    };
+  }
+
+  const flatRates = PRICING_PER_IMAGE[model];
+  if (flatRates && size) {
+    const key =
+      model === "dall-e-3" && quality ? `${quality}:${size}` : size;
+    const perImage = flatRates[key];
+    if (perImage !== undefined) {
+      return {
+        total: round4(perImage * n),
+        breakdown: { per_image_usd: perImage, n, key },
+        pricing_source_date: PRICING_DATE,
+        note: `Flat per-image rate for ${model}.`,
+      };
+    }
+  }
+
+  return null;
+}
 
 export class OpenAIImageClient {
   private client: OpenAI;
@@ -131,12 +232,22 @@ export class OpenAIImageClient {
     const res: any = await this.client.images.generate(params);
     process.stderr.write(`✅ Image generated (${res.data?.length ?? 0} variant(s))\n`);
 
+    const n = params.n ?? 1;
+    const cost = estimateCost(
+      params.model,
+      res.usage,
+      n,
+      res.size ?? params.size,
+      res.quality ?? params.quality
+    );
+
     return {
       images: (res.data ?? []).map((d: any) => ({
         b64_json: d.b64_json,
         revised_prompt: d.revised_prompt,
       })),
       usage: res.usage,
+      cost_estimate_usd: cost,
       size: res.size,
       quality: res.quality,
       output_format: res.output_format,
@@ -184,12 +295,22 @@ export class OpenAIImageClient {
     const res: any = await this.client.images.edit(params);
     process.stderr.write(`✅ Edit complete (${res.data?.length ?? 0} variant(s))\n`);
 
+    const n = params.n ?? 1;
+    const cost = estimateCost(
+      params.model,
+      res.usage,
+      n,
+      res.size ?? params.size,
+      res.quality ?? params.quality
+    );
+
     return {
       images: (res.data ?? []).map((d: any) => ({
         b64_json: d.b64_json,
         revised_prompt: d.revised_prompt,
       })),
       usage: res.usage,
+      cost_estimate_usd: cost,
       size: res.size,
       quality: res.quality,
       output_format: res.output_format,

@@ -1,6 +1,8 @@
 # 🖼️ GPT-Image MCP Server
 
-MCP server for OpenAI's image generation API — defaults to **`gpt-image-2`** (flagship as of April 2026), with full support for `gpt-image-1`, `gpt-image-1-mini`, and the legacy DALL-E models.
+MCP server for OpenAI's image generation API — defaults to **`chatgpt-image-latest`** (rolling alias that auto-tracks OpenAI's newest image model; currently `gpt-image-2`). Full support for `gpt-image-2`, `gpt-image-1.5`, `gpt-image-1`, `gpt-image-1-mini`, and legacy DALL-E.
+
+**Every response includes a `cost_estimate_usd` field** computed from the returned token counts (or flat per-image rates for DALL-E), so you can see exactly what each call costs.
 
 Inspired by [`nanobanana-mcp`](https://github.com/waimakers/nanobanana-mcp) (Gemini), but uses OpenAI's simpler multipart upload (no separate Files API).
 
@@ -70,7 +72,7 @@ Text-to-image. Returns base64 (or saves to disk if `outputPath` given).
 | Parameter | Type | Notes |
 |---|---|---|
 | `prompt` | string (req) | ≤ 32,000 chars for gpt-image-* |
-| `model` | enum | `gpt-image-2` (default), `gpt-image-1.5`, `gpt-image-1`, `gpt-image-1-mini`, `dall-e-3`, `dall-e-2` |
+| `model` | enum | `chatgpt-image-latest` (default, rolling), `gpt-image-2`, `gpt-image-2-2026-04-21` (pinned snapshot), `gpt-image-1.5`, `gpt-image-1`, `gpt-image-1-mini`, `dall-e-3`, `dall-e-2` |
 | `n` | int | 1–8 (gpt-image-2), 1–10 (gpt-image-1), 1 (dall-e-3) |
 | `size` | enum | `auto`, `1024x1024`, `1536x1024`, `1024x1536`, `2048x2048`, `2560x1440`, `1440x2560`, `4096x2304`, `2304x4096`, … |
 | `quality` | enum | `low`, `medium`, `high`, `auto` (gpt-image-*); `standard`, `hd` (dall-e-3) |

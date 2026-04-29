@@ -19,7 +19,9 @@ import * as fs from "fs";
 import * as path from "path";
 
 const MODEL_ENUM = [
+  "chatgpt-image-latest",
   "gpt-image-2",
+  "gpt-image-2-2026-04-21",
   "gpt-image-1.5",
   "gpt-image-1",
   "gpt-image-1-mini",
@@ -78,7 +80,7 @@ const TOOLS: Tool[] = [
   {
     name: "generate_image",
     description:
-      "Generate an image from a text prompt using OpenAI's gpt-image-2 (default) or other supported models. Returns base64 image; saves to disk if outputPath provided.",
+      "Generate an image from a text prompt using OpenAI's image API. Default model: chatgpt-image-latest (rolling alias to OpenAI's newest image model). Response includes cost_estimate_usd. Returns base64 image; saves to disk if outputPath provided.",
     inputSchema: {
       type: "object",
       properties: {
@@ -90,7 +92,8 @@ const TOOLS: Tool[] = [
         model: {
           type: "string",
           enum: MODEL_ENUM,
-          description: "Model to use. Default: gpt-image-2.",
+          description:
+            "Model to use. Default: chatgpt-image-latest (rolling alias). Pin to gpt-image-2-2026-04-21 for reproducibility.",
         },
         n: {
           type: "number",
@@ -316,6 +319,7 @@ class GptImageServer {
                 revised_prompts: result.images
                   .map((i: any) => i.revised_prompt)
                   .filter(Boolean),
+                cost_estimate_usd: result.cost_estimate_usd,
                 usage: result.usage,
               },
               null,
@@ -343,6 +347,7 @@ class GptImageServer {
               quality: result.quality,
               output_format: result.output_format,
               background: result.background,
+              cost_estimate_usd: result.cost_estimate_usd,
               usage: result.usage,
               note:
                 "Provide 'outputPath' to save to disk instead of returning base64.",
@@ -364,10 +369,22 @@ class GptImageServer {
             {
               models: [
                 {
-                  name: "gpt-image-2",
+                  name: "chatgpt-image-latest",
                   default: true,
                   description:
-                    "Flagship image model. 1K/2K/4K, up to 16 ref images, near-perfect text rendering.",
+                    "Rolling alias to OpenAI's newest image model. Currently points to gpt-image-2. Use for always-latest behavior.",
+                  features: [
+                    "text-to-image",
+                    "multi-image-edit",
+                    "inpainting",
+                    "transparent-background",
+                    "streaming",
+                  ],
+                },
+                {
+                  name: "gpt-image-2",
+                  description:
+                    "Flagship image model (April 2026). 1K/2K/4K, up to 16 ref images, near-perfect text rendering.",
                   features: [
                     "text-to-image",
                     "multi-image-edit",
@@ -376,6 +393,17 @@ class GptImageServer {
                     "streaming",
                   ],
                   maxN: 8,
+                },
+                {
+                  name: "gpt-image-2-2026-04-21",
+                  description:
+                    "Pinned snapshot of gpt-image-2 (2026-04-21). Use for reproducibility.",
+                  features: [
+                    "text-to-image",
+                    "multi-image-edit",
+                    "inpainting",
+                    "transparent-background",
+                  ],
                 },
                 {
                   name: "gpt-image-1.5",
@@ -417,14 +445,45 @@ class GptImageServer {
                 maxPromptChars: 32000,
               },
               pricing_per_1m_tokens_usd: {
+                "chatgpt-image-latest": {
+                  text_in: 5,
+                  image_in: 8,
+                  image_out: 32,
+                },
+                "gpt-image-2": { text_in: 5, image_in: 8, image_out: 32 },
+                "gpt-image-2-2026-04-21": {
+                  text_in: 5,
+                  image_in: 8,
+                  image_out: 32,
+                },
+                "gpt-image-1.5": {
+                  text_in: 5,
+                  image_in: 10,
+                  image_out: 36,
+                },
                 "gpt-image-1": { text_in: 5, image_in: 10, image_out: 40 },
                 "gpt-image-1-mini": {
                   text_in: 2,
                   image_in: 2.5,
                   image_out: 8,
                 },
-                "gpt-image-2": { image_in: 8, image_out: 32 },
               },
+              pricing_per_image_usd: {
+                "dall-e-3": {
+                  "standard:1024x1024": 0.04,
+                  "hd:1024x1024": 0.08,
+                  "standard:1024x1792": 0.08,
+                  "hd:1024x1792": 0.12,
+                  "standard:1792x1024": 0.08,
+                  "hd:1792x1024": 0.12,
+                },
+                "dall-e-2": {
+                  "1024x1024": 0.02,
+                  "512x512": 0.018,
+                  "256x256": 0.016,
+                },
+              },
+              pricing_snapshot_date: "2026-04-29",
               approx_cost_per_image_1024_usd: {
                 low: 0.006,
                 medium: 0.05,
