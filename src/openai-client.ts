@@ -101,19 +101,68 @@ export interface ImageResult {
 // OpenAI image model upgrade without a code change.
 const DEFAULT_MODEL: ImageModel = "chatgpt-image-latest";
 
-// Pricing snapshot, USD per 1M tokens. Verify at https://platform.openai.com/docs/pricing
+// Pricing snapshot, USD per 1M tokens.
+// Verified 2026-04-29 against:
+//   - https://developers.openai.com/api/docs/pricing            (primary, OpenAI dev docs)
+//   - https://community.openai.com/t/gpt-image-1-collected-pricing-information-and-why-responses-is-undocumented/1275254  (gpt-image-1, legacy)
+//   - https://techcrunch.com/2025/04/23/openai-makes-its-upgraded-image-generator-available-to-developers/  (gpt-image-1 launch)
+//   - https://www.imagine.art/blogs/gpt-image-1-5-pricing       (gpt-image-1.5 cross-check)
+//   - https://www.eesel.ai/blog/gpt-image-1-mini-pricing        (gpt-image-1-mini cross-check)
 const PRICING_DATE = "2026-04-29";
 
-const PRICING_PER_1M_TOKENS: Record<
-  string,
-  { text_in?: number; image_in?: number; image_out: number }
-> = {
-  "chatgpt-image-latest": { text_in: 5, image_in: 8, image_out: 32 },
-  "gpt-image-2": { text_in: 5, image_in: 8, image_out: 32 },
-  "gpt-image-2-2026-04-21": { text_in: 5, image_in: 8, image_out: 32 },
-  "gpt-image-1.5": { text_in: 5, image_in: 10, image_out: 36 },
-  "gpt-image-1": { text_in: 5, image_in: 10, image_out: 40 },
-  "gpt-image-1-mini": { text_in: 2, image_in: 2.5, image_out: 8 },
+interface TokenRates {
+  text_in?: number;
+  text_out?: number;
+  image_in?: number;
+  image_out: number;
+  cached_text_in?: number;
+  cached_image_in?: number;
+}
+
+const PRICING_PER_1M_TOKENS: Record<string, TokenRates> = {
+  // gpt-image-2 (released 2026-04-21). image_out is $30, NOT $32 — corrected
+  // from earlier third-party sources.
+  "chatgpt-image-latest": {
+    text_in: 5,
+    image_in: 8,
+    image_out: 30,
+    cached_image_in: 2,
+  },
+  "gpt-image-2": {
+    text_in: 5,
+    image_in: 8,
+    image_out: 30,
+    cached_image_in: 2,
+  },
+  "gpt-image-2-2026-04-21": {
+    text_in: 5,
+    image_in: 8,
+    image_out: 30,
+    cached_image_in: 2,
+  },
+  // gpt-image-1.5 also bills text_out (it's a reasoning model).
+  // Corrected: image_in is $8 (not $10), image_out is $32 (not $36).
+  "gpt-image-1.5": {
+    text_in: 5,
+    text_out: 10,
+    image_in: 8,
+    image_out: 32,
+    cached_text_in: 1.25,
+    cached_image_in: 2,
+  },
+  "gpt-image-1": {
+    text_in: 5,
+    image_in: 10,
+    image_out: 40,
+    cached_text_in: 1.25,
+    cached_image_in: 2.5,
+  },
+  "gpt-image-1-mini": {
+    text_in: 2,
+    image_in: 2.5,
+    image_out: 8,
+    cached_image_in: 0.25,
+  },
 };
 
 // DALL-E uses flat per-image pricing instead of tokens.
@@ -146,30 +195,56 @@ function estimateCost(
 ): ImageResult["cost_estimate_usd"] {
   const tokenRates = PRICING_PER_1M_TOKENS[model];
   if (tokenRates && usage) {
-    const textIn = usage.input_tokens_details?.text_tokens ?? 0;
-    const imageIn = usage.input_tokens_details?.image_tokens ?? 0;
+    // Total reported tokens, before splitting cached / fresh.
+    const textInTotal = usage.input_tokens_details?.text_tokens ?? 0;
+    const imageInTotal = usage.input_tokens_details?.image_tokens ?? 0;
     const imageOut =
       usage.output_tokens_details?.image_tokens ?? usage.output_tokens ?? 0;
+    const textOut = usage.output_tokens_details?.text_tokens ?? 0;
 
-    const textInUsd = (textIn / 1_000_000) * (tokenRates.text_in ?? 0);
-    const imageInUsd = (imageIn / 1_000_000) * (tokenRates.image_in ?? 0);
+    // OpenAI returns the cached portion alongside the totals when caching applies.
+    // The fresh portion is total - cached, billed at the higher rate.
+    const cachedTextIn =
+      usage.input_tokens_details?.cached_tokens?.text_tokens ??
+      usage.input_tokens_details?.cached_text_tokens ??
+      0;
+    const cachedImageIn =
+      usage.input_tokens_details?.cached_tokens?.image_tokens ??
+      usage.input_tokens_details?.cached_image_tokens ??
+      0;
+
+    const freshTextIn = Math.max(0, textInTotal - cachedTextIn);
+    const freshImageIn = Math.max(0, imageInTotal - cachedImageIn);
+
+    const textInUsd =
+      (freshTextIn / 1_000_000) * (tokenRates.text_in ?? 0) +
+      (cachedTextIn / 1_000_000) * (tokenRates.cached_text_in ?? 0);
+    const imageInUsd =
+      (freshImageIn / 1_000_000) * (tokenRates.image_in ?? 0) +
+      (cachedImageIn / 1_000_000) * (tokenRates.cached_image_in ?? 0);
     const imageOutUsd = (imageOut / 1_000_000) * tokenRates.image_out;
-    const total = textInUsd + imageInUsd + imageOutUsd;
+    const textOutUsd = (textOut / 1_000_000) * (tokenRates.text_out ?? 0);
+
+    const total = textInUsd + imageInUsd + imageOutUsd + textOutUsd;
 
     return {
       total: round4(total),
       breakdown: {
-        text_input_tokens: textIn,
-        image_input_tokens: imageIn,
+        text_input_tokens: textInTotal,
+        image_input_tokens: imageInTotal,
+        cached_text_input_tokens: cachedTextIn,
+        cached_image_input_tokens: cachedImageIn,
         image_output_tokens: imageOut,
+        text_output_tokens: textOut,
         text_input_usd: round4(textInUsd),
         image_input_usd: round4(imageInUsd),
         image_output_usd: round4(imageOutUsd),
+        text_output_usd: round4(textOutUsd),
         rates_per_1m_tokens: tokenRates,
       },
       pricing_source_date: PRICING_DATE,
       note:
-        "Estimate from snapshot pricing table. Verify against platform.openai.com/docs/pricing for billing accuracy.",
+        "Verified 2026-04-29 against developers.openai.com/api/docs/pricing. Re-verify before using for billing.",
     };
   }
 
